@@ -1,3 +1,5 @@
+.idea/
+
 .git/objects/bf/0cbff7ab63adb9a76a864a9c09c13e9d6a5868
 trained_models/model_2nd.pth
 trained_models/model_1st.pth
