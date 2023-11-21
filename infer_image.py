@@ -9,6 +9,21 @@ from tqdm import tqdm
 import utils
 
 
+def get_scaler(image: np.ndarray, mask: np.ndarray, src_percentile: float, dst_value: float):
+    assert image.ndim == mask.ndim == 3, "Only supports image: [H, W, C]"
+    assert image.shape == mask.shape, f"image and mask must have the same shape, but got {image.shape} and {mask.shape}"
+    if mask.sum() < 1.0:
+        return np.array([1.0], dtype=np.float32)
+    vis = image.copy()
+    src_value = vis.mean(axis=2)  # HW
+    mask = mask.min(axis=2)  # HW
+    src_value = np.percentile(src_value[mask > 0.999], src_percentile * 100)
+    alpha = 1.0 / np.clip(src_value, a_min=1e-5, a_max=None) * dst_value
+    # check NaN
+    assert not np.isnan(alpha).any(), "NaN in alpha"
+    return alpha
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--in_dir', '-i', default='./data/test_image', help='Input directory')
 parser.add_argument('--out_dir', '-o', default='./result/infer_image', help='Output directory')
@@ -63,13 +78,13 @@ def infer_light_transport_albedo_and_light(img, mask):
 
     return res_transport, res_albedo, res_light
 
-img_paths = sorted(glob(indir_path + '/*.jpg'))
+img_paths = sorted(glob(indir_path + '/*_img.png'))
 mask_paths = sorted(glob(indir_path + '/*_mask.png'))
 N_imgs = len(mask_paths)
 N_masks = len(mask_paths)
 print("Infer images...")
 for i in tqdm(range(N_imgs),ascii=True):
-    img_name = os.path.basename(img_paths[i])[:-len('.jpg')]
+    img_name = os.path.basename(img_paths[i])[:-len('_img.png')]
     outdir_path = args.out_dir + '/' + img_name
     if not os.path.exists(outdir_path):
         os.makedirs(outdir_path)
@@ -77,6 +92,7 @@ for i in tqdm(range(N_imgs),ascii=True):
 
     img_orig = cv2.imread(img_paths[i], cv2.IMREAD_COLOR).astype(np.float32)/255.
     mask_orig = cv2.imread(indir_path + '/' + img_name + '_mask.png', cv2.IMREAD_GRAYSCALE).astype(np.float32)/255.
+    mask_orig = (mask_orig > 0.5).astype(np.float32)
 
     if img_orig.shape[:2] != mask_orig.shape:
         h = min(img_orig.shape[0],mask_orig.shape[0])
@@ -93,9 +109,15 @@ for i in tqdm(range(N_imgs),ascii=True):
     shading = np.matmul(transport, light).clip(0.,None)
     rendering = (albedo * shading).clip(0.,1.)
 
+
+    # Visualization
+    _mask = mask[:, :, np.newaxis]
+    _mask = np.repeat(_mask, 3, axis=2)
+    vis_albedo = albedo * get_scaler(albedo, _mask, 0.99, 0.85)
+    vis_shading = shading * get_scaler(shading, _mask, 0.99, 0.85)
     cv2.imwrite(outdir_path+'/'+img_name+'.png', 255.*img)
-    cv2.imwrite(outdir_path+'/'+img_name+'_albedo.png', 255 * albedo)
-    cv2.imwrite(outdir_path+'/'+img_name+'_shading.png', 255 * shading.clip(0,1))
+    cv2.imwrite(outdir_path+'/'+img_name+'_albedo.png', 255 * vis_albedo)
+    cv2.imwrite(outdir_path+'/'+img_name+'_shading.png', 255 * vis_shading.clip(0,1))
     cv2.imwrite(outdir_path+'/'+img_name+'_mask.png', 255.*mask)
     np.save(outdir_path+'/'+img_name+'_light.npy', light)
     np.savez_compressed(outdir_path+'/'+img_name+'_transport.npz', T=transport)
